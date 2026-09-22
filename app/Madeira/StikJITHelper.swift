@@ -308,6 +308,7 @@ enum StikJITHelper {
     private static func allocateLegacyPool(poolSize: Int) -> (rx: UnsafeMutableRawPointer, rw: UnsafeMutableRawPointer, size: Int)? {
         // Pre-TXM iOS has one practical MAP_JIT/dual-map budget; avoid asking
         // iOS 18 for the 896 MB TXM pool used by newer systems.
+        setenv("MADEIRA_PRE_TXM", "1", 1)
         let legacySize = min(poolSize, 512 * 1024 * 1024)
         var rx: UnsafeMutableRawPointer?
         var rw: UnsafeMutableRawPointer?

@@ -10882,7 +10882,10 @@ void init_syscall_frame( LPTHREAD_START_ROUTINE entry, void *arg, BOOL suspend, 
         /* M8: Ask the debugger to write TEB data to page 0 via BRK #0xf00d cmd 3.
          * The debugger may have kernel privileges that the app doesn't.
          * Uses GDB M (memory write) command to write TEB data at address 0. */
-        if (!mapped) {
+        /* Pre-TXM iOS has no command-3 service. The legacy dual-mapped pool
+         * already supplies executable memory, and sending this BRK only parks
+         * the process behind the StikDebug exception port. */
+        if (!mapped && !(getenv("MADEIRA_PRE_TXM") && getenv("MADEIRA_PRE_TXM")[0] == '1')) {
             ERR("page0: trying debugger (BRK #0xf00d, x16=3)...\n");
             register uintptr_t x0_val __asm__("x0") = (uintptr_t)teb;
             register size_t x1_val __asm__("x1") = 0x4000;
