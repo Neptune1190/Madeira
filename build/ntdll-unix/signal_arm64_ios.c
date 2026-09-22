@@ -9336,6 +9336,12 @@ static void bus_handler( int signal, siginfo_t *siginfo, void *sigcontext )
             size_t pool_sz = ios_jit_pool_size_global;
             if (rx && (uintptr_t)pc >= rx && (uintptr_t)pc < rx + pool_sz)
             {
+                /* Pre-TXM iOS executes directly from the persistent RX alias.
+                 * Its pool PCs do not need TXM address translation; treating a
+                 * valid legacy-pool PC as JIT data causes an endless redelivery
+                 * loop at the first trampoline. */
+                const char *pre_txm = getenv("MADEIRA_PRE_TXM");
+                if (pre_txm && pre_txm[0] == '1') return;
                 extern volatile uint64_t g_wine_return_pc;
                 extern volatile uint64_t g_wine_return_x18;
                 extern volatile uint64_t g_wine_return_count;
