@@ -390,9 +390,15 @@ bool jit_legacy_pool_create(size_t size, void **rx, void **rw, size_t *actual_si
         *actual_size = g_legacy_pool->size;
         return true;
     }
+
     size = align_to_page(size);
     g_legacy_pool = jit_region_create_map_jit(size);
+    if (!g_legacy_pool) {
+        jit_log("MAP_JIT allocator unavailable; falling back to legacy Mach dual-map path");
+        g_legacy_pool = jit_region_create(size);
+    }
     if (!g_legacy_pool) return false;
+
     *rx = g_legacy_pool->rx_ptr;
     *rw = g_legacy_pool->rw_ptr;
     *actual_size = g_legacy_pool->size;
