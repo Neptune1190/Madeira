@@ -9336,12 +9336,19 @@ static void bus_handler( int signal, siginfo_t *siginfo, void *sigcontext )
             size_t pool_sz = ios_jit_pool_size_global;
             if (rx && (uintptr_t)pc >= rx && (uintptr_t)pc < rx + pool_sz)
             {
-                /* Pre-TXM iOS executes directly from the persistent RX alias.
-                 * Its pool PCs do not need TXM address translation; treating a
-                 * valid legacy-pool PC as JIT data causes an endless redelivery
-                 * loop at the first trampoline. */
+                /* Valid RX-pool PCs are executable by definition. This branch is a
+                 * misclassification trap: a fault inside the JIT RX alias is not a
+                 * guest data fault, and returning early prevents the endless
+                 * pool+8 redelivery loop. The legacy pre-TXM path is especially
+                 * sensitive to this: the first trampoline is exactly at +8, and
+                 * if we re-deliver it the guest never recovers. */
                 const char *pre_txm = getenv("MADEIRA_PRE_TXM");
                 if (pre_txm && pre_txm[0] == '1') return;
+                /* Even when the env flag has not been set yet, a PC landing inside
+                 * the RX alias still indicates executable code, not guest data. Treat
+                 * it as a valid pool PC and stop the redelivery loop instead of
+                 * logging and re-faulting the same address forever. */
+                if ((uintptr_t)pc - rx < pool_sz) return;
                 extern volatile uint64_t g_wine_return_pc;
                 extern volatile uint64_t g_wine_return_x18;
                 extern volatile uint64_t g_wine_return_count;
