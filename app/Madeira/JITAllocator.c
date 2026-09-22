@@ -15,6 +15,11 @@
 #include <mach-o/dyld.h>
 #include <os/log.h>
 
+#ifndef MAP_JIT
+#define MAP_JIT 0x800
+#endif
+extern void pthread_jit_write_protect_np(int enabled);
+
 // csops syscall - used to check CS_DEBUGGED flag
 #ifndef CS_DEBUGGED
 #define CS_DEBUGGED 0x10000000
@@ -60,6 +65,7 @@ struct JITRegion {
     void *rx_ptr;       // Read-Execute view (for executing code)
     size_t size;        // Size of the region
     mach_port_t mem_entry;  // Memory entry port for cleanup
+    bool map_jit;
 };
 
 static JITRegion *g_legacy_pool;
@@ -87,6 +93,48 @@ static void jit_log(const char *fmt, ...) {
 
 static size_t align_to_page(size_t size) {
     return (size + JIT_PAGE_SIZE - 1) & ~(JIT_PAGE_SIZE - 1);
+}
+
+static JITRegion *jit_region_create_map_jit(size_t size) {
+    JITRegion *region = calloc(1, sizeof(JITRegion));
+    if (!region) return NULL;
+    region->size = size;
+    region->mem_entry = MACH_PORT_NULL;
+    region->map_jit = true;
+
+    void *rw = mmap(NULL, size, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
+    if (rw == MAP_FAILED) {
+        jit_log("MAP_JIT allocation failed: errno=%d", errno);
+        free(region);
+        return NULL;
+    }
+
+    mach_vm_address_t rx_addr = 0;
+    vm_prot_t current = 0, maximum = 0;
+    kern_return_t kr = vm_remap(mach_task_self(), (vm_address_t *)&rx_addr,
+        size, 0, VM_FLAGS_ANYWHERE, mach_task_self(), (vm_address_t)rw,
+        FALSE, &current, &maximum, VM_INHERIT_DEFAULT);
+    if (kr != KERN_SUCCESS) {
+        jit_log("MAP_JIT RX remap failed: %s (kr=%d)", mach_error_string(kr), kr);
+        munmap(rw, size);
+        free(region);
+        return NULL;
+    }
+    kr = vm_protect(mach_task_self(), rx_addr, size, FALSE,
+                    VM_PROT_READ | VM_PROT_EXECUTE);
+    if (kr != KERN_SUCCESS) {
+        jit_log("MAP_JIT RX protection failed: %s (kr=%d)", mach_error_string(kr), kr);
+        vm_deallocate(mach_task_self(), rx_addr, size);
+        munmap(rw, size);
+        free(region);
+        return NULL;
+    }
+    region->rw_ptr = rw;
+    region->rx_ptr = (void *)rx_addr;
+    jit_log("MAP_JIT dual-mapped region created: RW=%p RX=%p size=%zu",
+            rw, region->rx_ptr, size);
+    return region;
 }
 
 JITRegion *jit_region_create(size_t size) {
@@ -320,7 +368,8 @@ void jit_region_destroy(JITRegion *region) {
     mach_port_t task = mach_task_self();
 
     if (region->rw_ptr) {
-        vm_deallocate(task, (vm_address_t)region->rw_ptr, region->size);
+        if (region->map_jit) munmap(region->rw_ptr, region->size);
+        else vm_deallocate(task, (vm_address_t)region->rw_ptr, region->size);
         jit_log("Unmapped RW view at %p", region->rw_ptr);
     }
     if (region->rx_ptr) {
@@ -342,7 +391,8 @@ bool jit_legacy_pool_create(size_t size, void **rx, void **rw, size_t *actual_si
         *actual_size = g_legacy_pool->size;
         return true;
     }
-    g_legacy_pool = jit_region_create(size);
+    size = align_to_page(size);
+    g_legacy_pool = jit_region_create_map_jit(size);
     if (!g_legacy_pool) return false;
     *rx = g_legacy_pool->rx_ptr;
     *rw = g_legacy_pool->rw_ptr;
@@ -377,11 +427,13 @@ void *jit_region_write(JITRegion *region, size_t offset, const void *code, size_
         return NULL;
     }
 
+    if (region->map_jit) pthread_jit_write_protect_np(0);
     // Write to the RW view
     memcpy((char *)region->rw_ptr + offset, code, code_size);
 
     // Invalidate icache on the RX view
     sys_icache_invalidate((char *)region->rx_ptr + offset, code_size);
+    if (region->map_jit) pthread_jit_write_protect_np(1);
 
     // Return the RX pointer for execution
     return (char *)region->rx_ptr + offset;
