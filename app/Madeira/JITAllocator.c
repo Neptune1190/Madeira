@@ -18,7 +18,6 @@
 #ifndef MAP_JIT
 #define MAP_JIT 0x800
 #endif
-extern void pthread_jit_write_protect_np(int enabled);
 
 // csops syscall - used to check CS_DEBUGGED flag
 #ifndef CS_DEBUGGED
@@ -427,13 +426,11 @@ void *jit_region_write(JITRegion *region, size_t offset, const void *code, size_
         return NULL;
     }
 
-    if (region->map_jit) pthread_jit_write_protect_np(0);
     // Write to the RW view
     memcpy((char *)region->rw_ptr + offset, code, code_size);
 
     // Invalidate icache on the RX view
     sys_icache_invalidate((char *)region->rx_ptr + offset, code_size);
-    if (region->map_jit) pthread_jit_write_protect_np(1);
 
     // Return the RX pointer for execution
     return (char *)region->rx_ptr + offset;
