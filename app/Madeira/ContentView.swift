@@ -1122,16 +1122,13 @@ struct ContentView: View {
 
     private func logEntitlementStatus() {
         guard let ents = entitlements else { return }
-        logStore.log("Checking entitlements...")
+        logStore.log("Checking runtime JIT state...")
         logStore.log("  bundle-id: \(Bundle.main.bundleIdentifier ?? "unknown")", level: .info)
         logStore.log("  application-identifier: \(appEntitlementString("application-identifier") ?? "missing")", level: .info)
         logStore.log("  signing-team: \(appEntitlementString("com.apple.developer.team-identifier") ?? "missing")", level: .info)
-        logStore.log("  allow-jit: \(ents.jitAllowed)", level: ents.jitAllowed ? .success : .error)
-        logStore.log("  increased-memory-limit: \(ents.increasedMemory)", level: ents.increasedMemory ? .success : .debug)
-        logStore.log("  extended-virtual-addressing: \(ents.extendedVA)", level: ents.extendedVA ? .success : .debug)
-        if !ents.extendedVA {
-            logStore.log("  Tip: Use GetMoreRam to inject extended-virtual-addressing", level: .info)
-        }
+        logStore.log("  jit-via-debugger: \(debuggerAttached)", level: debuggerAttached ? .success : .error)
+        logStore.log("  allow-jit-entitlement: \(ents.jitAllowed)", level: ents.jitAllowed ? .success : .debug)
+        logStore.log("  memory-va status: informational only; not a hard blocker for the JIT-only design.", level: .info)
     }
 
     private var actionButtons: some View {

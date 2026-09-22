@@ -80,10 +80,53 @@ enum StikJITHelper {
     /// Allocate a JIT memory pool via BRK #0xf00d WITHOUT detaching the debugger.
     /// The debugger stays attached so Wine can use BRK to prepare PE code pages.
     static func allocatePool(poolSize: Int = 128 * 1024 * 1024) -> (rx: UnsafeMutableRawPointer, rw: UnsafeMutableRawPointer, size: Int)? {
+        // The app's design is debugger-driven JIT: the only valid gate is
+        // CS_DEBUGGED, and StikDebug/JIT is responsible for the memory grant.
+        // Do not force the incompatible legacy pre-TXM MAP_JIT path just because
+        // the runtime is below iOS 26.
+        guard jit_check_debugged() else {
+            LogStore.shared.log("CS_DEBUGGED is not set, so no JIT allocation is valid for this process.", level: .error)
+            return nil
+        }
+
+        LogStore.shared.log("Allocating \(poolSize / 1024 / 1024)MB JIT pool via debugger/JIT protocol...")
+
+        // Prefer the debugger-backed protocol path for all supported runtimes.
+        // The legacy dual-map path is kept only as a last resort when the JIT
+        // protocol itself is unavailable.
+        if let rx = jit26_prepare_region(nil, poolSize), rx != UnsafeMutableRawPointer(bitPattern: 0) {
+            LogStore.shared.log("Debugger/JIT protocol allocated RX at \(String(format: "%p", Int(bitPattern: rx)))", level: .success)
+            var rwAddr: vm_address_t = 0
+            var curProt: vm_prot_t = 0
+            var maxProt: vm_prot_t = 0
+            let kr = vm_remap(mach_task_self_, &rwAddr, vm_size_t(poolSize), 0, VM_FLAGS_ANYWHERE,
+                              mach_task_self_, vm_address_t(bitPattern: rx), 0,
+                              &curProt, &maxProt, VM_INHERIT_NONE)
+            guard kr == KERN_SUCCESS else {
+                LogStore.shared.log("vm_remap fallback failed: \(kr)", level: .error)
+                return nil
+            }
+            let kr2 = vm_protect(mach_task_self_, rwAddr, vm_size_t(poolSize), 0, VM_PROT_READ | VM_PROT_WRITE)
+            guard kr2 == KERN_SUCCESS else {
+                LogStore.shared.log("vm_protect(RW) fallback failed: \(kr2)", level: .error)
+                vm_deallocate(mach_task_self_, rwAddr, vm_size_t(poolSize))
+                return nil
+            }
+            let rw = UnsafeMutableRawPointer(bitPattern: rwAddr)!
+            LogStore.shared.log("JIT pool ready via debugger protocol: RX=\(String(format: "%p", Int(bitPattern: rx))), RW=\(String(format: "%p", Int(bitPattern: rw))), size=\(poolSize / 1024 / 1024)MB", level: .success)
+            setenv("MADEIRA_PRE_TXM", "0", 1)
+            return (rx: rx, rw: rw, size: poolSize)
+        }
+
+        // Only if the debugger protocol is not available do we go down the
+        // compatibility fallback path.
         if #unavailable(iOS 26.0) {
+            LogStore.shared.log("Debugger protocol unavailable; falling back to legacy dual-map allocation.", level: .info)
             return allocateLegacyPool(poolSize: poolSize)
         }
-        LogStore.shared.log("Allocating \(poolSize / 1024 / 1024)MB JIT pool via debugger...")
+
+        LogStore.shared.log("Debugger/JIT protocol did not return a valid RX region.", level: .error)
+        return nil
 
         // iOS-Madeira: FEX's dispatcher emit has a position-dependent encoding
         // bug — only works when the JIT pool lands at a high enough address
