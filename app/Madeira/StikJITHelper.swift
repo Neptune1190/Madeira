@@ -80,6 +80,9 @@ enum StikJITHelper {
     /// Allocate a JIT memory pool via BRK #0xf00d WITHOUT detaching the debugger.
     /// The debugger stays attached so Wine can use BRK to prepare PE code pages.
     static func allocatePool(poolSize: Int = 128 * 1024 * 1024) -> (rx: UnsafeMutableRawPointer, rw: UnsafeMutableRawPointer, size: Int)? {
+        if #unavailable(iOS 26.0) {
+            return allocateLegacyPool(poolSize: poolSize)
+        }
         LogStore.shared.log("Allocating \(poolSize / 1024 / 1024)MB JIT pool via debugger...")
 
         // iOS-Madeira: FEX's dispatcher emit has a position-dependent encoding
@@ -165,11 +168,7 @@ enum StikJITHelper {
                 : "  bad region kept as pin (vm_deallocate kr=\(dkr))")
         }
         guard let rxPtr = rxPtrOpt else {
-            LogStore.shared.log("BAD POOL: no valid placement after retries. Killing in 10s — please relaunch.", level: .error)
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 10) {
-                LogStore.shared.log("BAD POOL — exiting now. Relaunch the app.", level: .error)
-                exit(0)
-            }
+            LogStore.shared.log("JIT pool unavailable: debugger did not provide a valid RX region. Wine will not start.", level: .error)
             return nil
         }
         let rxAddr = Int(bitPattern: rxPtr)
@@ -303,8 +302,32 @@ enum StikJITHelper {
         return (rx: rxPtr, rw: rwPtr, size: poolSize)
     }
 
+    /// Pre-TXM iOS uses a persistent dual-mapped Mach region instead of the
+    /// iOS 26 debugger BRK protocol. Keep this path separate so iOS 18 never
+    /// executes the TXM-only breakpoint allocator.
+    private static func allocateLegacyPool(poolSize: Int) -> (rx: UnsafeMutableRawPointer, rw: UnsafeMutableRawPointer, size: Int)? {
+        // Pre-TXM iOS has one practical MAP_JIT/dual-map budget; avoid asking
+        // iOS 18 for the 896 MB TXM pool used by newer systems.
+        let legacySize = min(poolSize, 512 * 1024 * 1024)
+        var rx: UnsafeMutableRawPointer?
+        var rw: UnsafeMutableRawPointer?
+        var actualSize = 0
+        guard jit_legacy_pool_create(legacySize, &rx, &rw, &actualSize),
+              let rx, let rw else {
+            LogStore.shared.log("Legacy dual-mapped JIT pool allocation failed.", level: .error)
+            return nil
+        }
+        LogStore.shared.log("Legacy dual-mapped JIT pool ready: RX=\(String(format: \"%p\", Int(bitPattern: rx))), RW=\(String(format: \"%p\", Int(bitPattern: rw))), size=\(actualSize / 1024 / 1024)MB", level: .success)
+        return (rx: rx, rw: rw, size: actualSize)
+    }
+
     /// Detach the debugger. Call this after Wine is done loading PE DLLs.
     static func detachDebugger() {
+        if #unavailable(iOS 26.0) {
+            LogStore.shared.log("Pre-TXM iOS: no debugger BRK detach required.", level: .info)
+            setenv("MADEIRA_DETACHED", "1", 1)
+            return
+        }
         LogStore.shared.log("Detaching debugger...")
         jit26_detach()
         // task #34: signal in-process waiters (share-probe poller). CS_DEBUGGED

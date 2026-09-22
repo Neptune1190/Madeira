@@ -62,6 +62,8 @@ struct JITRegion {
     mach_port_t mem_entry;  // Memory entry port for cleanup
 };
 
+static JITRegion *g_legacy_pool;
+
 static jit_log_callback_t g_log_callback = NULL;
 
 void jit_set_log_callback(jit_log_callback_t callback) {
@@ -330,6 +332,24 @@ void jit_region_destroy(JITRegion *region) {
     }
 
     free(region);
+}
+
+bool jit_legacy_pool_create(size_t size, void **rx, void **rw, size_t *actual_size) {
+    if (!rx || !rw || !actual_size) return false;
+    if (g_legacy_pool) {
+        *rx = g_legacy_pool->rx_ptr;
+        *rw = g_legacy_pool->rw_ptr;
+        *actual_size = g_legacy_pool->size;
+        return true;
+    }
+    g_legacy_pool = jit_region_create(size);
+    if (!g_legacy_pool) return false;
+    *rx = g_legacy_pool->rx_ptr;
+    *rw = g_legacy_pool->rw_ptr;
+    *actual_size = g_legacy_pool->size;
+    jit_log("Legacy pre-TXM JIT pool ready: RW=%p, RX=%p, size=%zu",
+            *rw, *rx, *actual_size);
+    return true;
 }
 
 void *jit_region_rw_ptr(JITRegion *region) {

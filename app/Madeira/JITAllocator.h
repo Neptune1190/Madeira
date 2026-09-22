@@ -28,6 +28,10 @@ void jit_region_destroy(JITRegion *region);
 /// changes nothing if the private ownership API refuses.
 bool jit_make_region_no_footprint(void *addr, size_t size, const char *label);
 
+// Create the pre-TXM dual-mapped pool used on iOS 17.4 through iOS 18.
+// The returned mappings remain owned by the process for its lifetime.
+bool jit_legacy_pool_create(size_t size, void **rx, void **rw, size_t *actual_size);
+
 // Get the RW (writable) pointer. Write generated code here.
 void *jit_region_rw_ptr(JITRegion *region);
 
