@@ -317,7 +317,7 @@ enum StikJITHelper {
             LogStore.shared.log("Legacy dual-mapped JIT pool allocation failed.", level: .error)
             return nil
         }
-        LogStore.shared.log("Legacy dual-mapped JIT pool ready: RX=\(String(format: \"%p\", Int(bitPattern: rx))), RW=\(String(format: \"%p\", Int(bitPattern: rw))), size=\(actualSize / 1024 / 1024)MB", level: .success)
+        LogStore.shared.log("Legacy dual-mapped JIT pool ready: RX=\(String(format: "%p", Int(bitPattern: rx))), RW=\(String(format: "%p", Int(bitPattern: rw))), size=\(actualSize / 1024 / 1024)MB", level: .success)
         return (rx: rx, rw: rw, size: actualSize)
     }
 
