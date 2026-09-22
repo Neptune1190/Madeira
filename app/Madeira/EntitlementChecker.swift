@@ -29,6 +29,12 @@ func checkAppEntitlement(_ ent: String) -> Bool {
     return false
 }
 
+func appEntitlementString(_ ent: String) -> String? {
+    guard let task = _SecTaskCreateFromSelf(nil),
+          let value = _SecTaskCopyValueForEntitlement(task, ent as NSString, nil) else { return nil }
+    return value as? String
+}
+
 struct EntitlementStatus {
     let jitAllowed: Bool
     let increasedMemory: Bool
