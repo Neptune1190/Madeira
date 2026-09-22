@@ -367,30 +367,31 @@ void *jit_region_write(JITRegion *region, size_t offset, const void *code, size_
     return (char *)region->rx_ptr + offset;
 }
 
-// SIGTRAP handler: skips BRK instruction (PC += 4) and zeros x0.
-// This prevents crashes when BRK is executed without a debugger attached.
+// SIGTRAP fallback for the JIT protocol. StikDebug normally consumes this
+// breakpoint, but CS_DEBUGGED can remain set after its exception service has
+// stopped responding on older iOS versions. Only consume our protocol BRK;
+// leave unrelated breakpoints for the default crash behavior.
 static void sigtrap_handler(int sig, siginfo_t *info, void *context) {
     (void)sig;
     (void)info;
     ucontext_t *uc = (ucontext_t *)context;
+    uint32_t instruction = *(const uint32_t *)(uintptr_t)uc->uc_mcontext->__ss.__pc;
+    uint32_t immediate = (instruction >> 5) & 0xffffu;
+    if ((instruction & 0xffe0001fu) != 0xd4200000u || immediate != 0xf00du) {
+        signal(SIGTRAP, SIG_DFL);
+        return;
+    }
     uc->uc_mcontext->__ss.__pc += 4;
     uc->uc_mcontext->__ss.__x[0] = 0;
 }
 
 void jit_install_trap_handler(void) {
-    // Only install if no debugger is attached.
-    // When StikDebug is attached, it handles BRK/SIGTRAP directly.
-    // Our handler would steal signals from the debugger and break the protocol.
-    if (jit_check_debugged()) {
-        jit_log("Debugger attached — skipping SIGTRAP handler (debugger handles BRK)");
-        return;
-    }
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_flags = SA_SIGINFO;
     sa.sa_sigaction = sigtrap_handler;
     sigaction(SIGTRAP, &sa, NULL);
-    jit_log("SIGTRAP handler installed (no debugger)");
+    jit_log("SIGTRAP JIT fallback handler installed (debugger protocol remains preferred)");
 }
 
 // iOS 26 BRK-based JIT syscalls.
